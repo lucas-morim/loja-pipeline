@@ -10,23 +10,28 @@ dimensional em estrela, e disponibiliza-os para consulta em SQL.
    (extracto     └──────┬───────┘
     da loja)            │
                         ▼
-                 ┌──────────────┐
-                 │  Glue job    │   PySpark: limpa, modela, agrega
-                 │  loja-etl    │
-                 └──────┬───────┘
-                        ▼
-                 ┌──────────────────────┐
-                 │  S3  processado/     │   Parquet, particionado por ano/mês
-                 └──────┬───────────────┘
-                        ▼
-                 ┌──────────────┐
-                 │ Glue Catalog │   esquema e localizações
-                 └──────┬───────┘
+                 ┌──────────────┐              ┌─────────────────┐
+                 │  Glue job    │◀─────────────│     Airflow     │
+                 │  loja-etl    │   dispara    │  loja_pipeline  │
+                 └──────┬───────┘              │                 │
+                        ▼                      │  diaria, 03:00  │
+                 ┌──────────────────────┐      │  encadeia os    │
+                 │  S3  processado/     │      │  dois passos e  │
+                 └──────┬───────────────┘      │  trata de falhas│
+                        ▼                      │                 │
+                 ┌──────────────┐   dispara    │                 │
+                 │ Glue Catalog │◀─────────────│                 │
+                 └──────┬───────┘              └─────────────────┘
                         ▼
                  ┌──────────────┐
                  │   Athena     │   SQL sobre ficheiros, sem servidor
                  └──────────────┘
 ```
+
+O Glue corre o PySpark que limpa e modela; o resultado é Parquet particionado
+por ano e mês; o catálogo guarda o esquema e as localizações; o Athena consulta
+por cima. O Airflow não processa nada — manda arrancar, espera, e só cataloga
+se a transformação tiver corrido bem.
 
 ## O modelo
 
@@ -105,12 +110,14 @@ cdk bootstrap            # uma vez por conta e região
 cdk deploy
 ```
 
-Lançar o ETL e catalogar o resultado:
+Lançar o ETL e catalogar o resultado, à mão:
 
 ```bash
 aws glue start-job-run --job-name loja-etl
 aws glue start-crawler --name loja-crawler
 ```
+
+Ou deixar o Airflow fazê-lo (ver *Orquestração*, abaixo).
 
 Depois, no Athena, workgroup `loja`, base de dados `loja`:
 
@@ -142,6 +149,37 @@ O verificador corre o ETL, lê o Parquet que saiu, e compara com valores
 calculados outra vez em Python puro a partir dos CSV — dois caminhos
 independentes.
 
+## Orquestração
+
+A DAG `dags/loja_pipeline_dag.py` encadeia os dois passos, todos os dias às
+03:00:
+
+```
+transformar  ──▶  catalogar
+```
+
+Se a transformação falhar, o catalogador não corre — que é a razão de existir
+um orquestrador. Sem ele, o crawler corria na mesma e catalogava o resultado
+de uma transformação falhada, deixando o Athena a servir dados errados sem
+nenhum sinal de que algo correu mal.
+
+O Airflow apenas **dispara** os recursos; quem os **define** é o CDK. Um
+recurso declarado em dois sítios acaba por divergir, e deixa de se saber qual
+manda. É também por isso que o passo do crawler usa uma chamada directa à API
+em vez do `GlueCrawlerOperator`: esse operador quer a definição completa do
+crawler, porque também o sabe criar.
+
+Para correr localmente:
+
+```bash
+pip install apache-airflow-providers-amazon
+ln -s "$(pwd)/dags/loja_pipeline_dag.py" "$AIRFLOW_HOME/dags/"
+airflow standalone
+```
+
+As credenciais vêm da cadeia por omissão do boto3, ou seja, do mesmo
+`~/.aws/credentials` que o AWS CLI usa.
+
 ## Estrutura
 
 ```
@@ -151,6 +189,8 @@ loja_pipeline/
 jobs/
   transformar.py            o ETL em PySpark (corre local e no Glue)
   verificar_spark.py        testes do ETL contra um caminho independente
+dags/
+  loja_pipeline_dag.py      a orquestração
 dados/                      os CSV de exemplo
 ```
 
@@ -182,8 +222,9 @@ tipo decimal.
 posição. Com este volume é instantâneo; com anos de histórico, não seria
 aceitável.
 
-**Não há orquestração.** O job e o crawler são lançados à mão. O passo seguinte
-é uma DAG de Airflow que os encadeia, trata das falhas e os corre em horário.
+**O Airflow corre localmente**, não na nuvem. Para o pipeline correr sem o meu
+portátil ligado, a DAG teria de viver num Airflow gerido — na AWS, o MWAA — ou
+num servidor próprio. A DAG em si não mudaria.
 
 **Não há testes de qualidade de dados** no pipeline — só os testes do ETL,
 que correm localmente. Em produção verificar-se-iam contagens, nulos e
