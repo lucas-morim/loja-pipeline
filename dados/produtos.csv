@@ -1,0 +1,15 @@
+produto_id,nome,categoria_id,preco_atual
+1,Teclado mecanico,1,89.9
+2,Rato sem fios,1,24.5
+3,Monitor 27 polegadas,1,219.0
+4,Webcam HD,1,42.0
+5,Auscultadores bluetooth,2,59.9
+6,Coluna portatil,2,39.9
+7,Microfone USB,2,74.0
+8,Cafeteira,3,54.9
+9,Aspirador manual,3,112.0
+10,Tapete de yoga,4,29.9
+11,Garrafa termica,4,18.5
+12,Halteres 5kg,4,34.0
+13,Romance policial,5,14.9
+14,Cabo USB-C 2m,,9.9
